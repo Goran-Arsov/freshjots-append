@@ -1,0 +1,129 @@
+# Fresh Jots — Append
+#
+# Composite GitHub Action that appends a line to a Fresh Jots notebook from
+# any workflow. Wraps POST /api/v1/notes/by-filename/:filename/append plus
+# the optional dead-man's-switch deadline PATCH on the same note.
+#
+# Why composite (not Docker, not Node):
+#   * Instant cold start — no image pull, no `npm install`.
+#   * Runs on linux / macos / windows GH-hosted runners with no extra setup;
+#     all three preinstall `bash`, `curl`, and `jq`.
+#   * Transparent — users can read the action source in 60 seconds.
+#
+# Auth: FRESHJOTS_TOKEN env var (must be a repository or organization secret).
+# We deliberately don't accept the token as a `with:` input — `with:` values
+# end up in the workflow file (or the run's metadata if templated through
+# `${{ secrets.* }}`), and a token-shaped input invites copy-paste mistakes
+# that leave the literal value in YAML. The env-var-only contract makes the
+# correct usage the only usage.
+name: Fresh Jots — Append
+description: Append a line to a Fresh Jots notebook from any GitHub workflow.
+author: Goran Arsov
+
+branding:
+  icon: edit-3
+  color: yellow
+
+inputs:
+  note:
+    description: |
+      Filename of the notebook to append to (e.g. "deploys-prod"). The note is
+      created on first append if it doesn't exist.
+    required: true
+  text:
+    description: |
+      Text to append. The append-only convention is one line per call — keep
+      it short and structured. Newlines are accepted; the API stores them
+      verbatim and the UI renders them as line breaks.
+    required: true
+  append-deadline-hours:
+    description: |
+      Optional dead-man's-switch deadline (hours, 1–720). When set, the note
+      will email the owner if no append arrives within this many hours of
+      the previous one. Idempotent — safe to set on every run; the value
+      sticks on the note until you change it.
+    required: false
+    default: ""
+  api-url:
+    description: |
+      API base URL. Override only for self-hosted or staging instances of
+      Fresh Jots. The default is the production endpoint.
+    required: false
+    default: https://freshjots.com/api/v1
+
+outputs:
+  note-id:
+    description: Numeric id of the note that received the append.
+    value: ${{ steps.append.outputs.note-id }}
+
+runs:
+  using: composite
+  steps:
+    # Fail loud-and-early on a missing token. The API would return 401, but
+    # the resulting "missing or invalid bearer token" message is less useful
+    # than telling a CI author exactly which secret to add to which scope.
+    - name: Validate FRESHJOTS_TOKEN
+      shell: bash
+      run: |
+        if [ -z "${FRESHJOTS_TOKEN:-}" ]; then
+          echo "::error::FRESHJOTS_TOKEN env var is required. Add it as a repository or organization secret and reference it in the workflow's 'env' block, e.g. 'env: FRESHJOTS_TOKEN: \${{ secrets.FRESHJOTS_TOKEN }}'."
+          exit 1
+        fi
+
+    # Append first. The append-by-filename endpoint creates the note on
+    # first call (NamedStreamCreator), so this step is the only one that
+    # MUST succeed. The deadline PATCH below is a nice-to-have layered on
+    # top — failing it must not lose the heartbeat.
+    - name: Append
+      id: append
+      shell: bash
+      env:
+        FJ_NOTE: ${{ inputs.note }}
+        FJ_TEXT: ${{ inputs.text }}
+        FJ_API: ${{ inputs.api-url }}
+      run: |
+        set -euo pipefail
+        body=$(jq -n --arg text "${FJ_TEXT}" '{text:$text}')
+        http_code=$(curl -sS -o /tmp/fjs_append.json -w '%{http_code}' \
+          -X POST "${FJ_API}/notes/by-filename/${FJ_NOTE}/append" \
+          -H "Authorization: Bearer ${FRESHJOTS_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "${body}")
+        if [[ ! "${http_code}" =~ ^2 ]]; then
+          echo "::error::append failed (HTTP ${http_code})"
+          cat /tmp/fjs_append.json
+          exit 1
+        fi
+        # Response shape: {"note":{"id":N,...},"appended":{"bytes":...}}.
+        # Fall back to top-level .id for forward-compat with a flatter shape.
+        id=$(jq -r '.note.id // .id // empty' /tmp/fjs_append.json)
+        echo "note-id=${id}" >> "${GITHUB_OUTPUT}"
+        echo "Appended to ${FJ_NOTE} (note id ${id})"
+
+    # Deadline PATCH runs after the append so the note is guaranteed to
+    # exist (first run also creates it). Idempotent: setting the same
+    # deadline value on a note that already has it is a no-op server-side.
+    - name: Set dead-man deadline
+      if: inputs.append-deadline-hours != ''
+      shell: bash
+      env:
+        FJ_NOTE: ${{ inputs.note }}
+        FJ_HOURS: ${{ inputs.append-deadline-hours }}
+        FJ_API: ${{ inputs.api-url }}
+      run: |
+        set -euo pipefail
+        body=$(jq -n --argjson hrs "${FJ_HOURS}" '{note:{append_deadline_hours:$hrs}}')
+        http_code=$(curl -sS -o /tmp/fjs_patch.json -w '%{http_code}' \
+          -X PATCH "${FJ_API}/notes/by-filename/${FJ_NOTE}" \
+          -H "Authorization: Bearer ${FRESHJOTS_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "${body}")
+        if [[ "${http_code}" =~ ^2 ]]; then
+          echo "Deadline set on ${FJ_NOTE} (${FJ_HOURS}h)"
+        else
+          # Warn rather than fail — the heartbeat already landed in the
+          # previous step. A failed PATCH is a configuration issue, not a
+          # missed run, and the user shouldn't see a red workflow over it.
+          echo "::warning::deadline PATCH failed (HTTP ${http_code}) — heartbeat was still recorded"
+          cat /tmp/fjs_patch.json
+        fi
