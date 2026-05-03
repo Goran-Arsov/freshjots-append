@@ -1,5 +1,8 @@
 # freshjots-append
 
+[![Marketplace](https://img.shields.io/badge/Marketplace-Fresh%20Jots%20%E2%80%94%20Append-blue?logo=github)](https://github.com/marketplace/actions/fresh-jots-append)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 GitHub Action that appends a line to a [Fresh Jots](https://freshjots.com)
 notebook from any workflow. One step, no install.
 
