@@ -116,8 +116,8 @@ The `v1` ref will always point to the latest 1.x release.
 
 ## Pricing
 
-Requires a Fresh Jots [Dev tier](https://freshjots.com/pricing) account
-($99/yr) or higher. The Action itself is free and MIT-licensed.
+Requires a Fresh Jots [Pro tier](https://freshjots.com/pricing) account
+($149/yr) or higher. The Action itself is free and MIT-licensed.
 
 ## License
 
