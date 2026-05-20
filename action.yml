@@ -66,7 +66,7 @@ runs:
       shell: bash
       run: |
         if [ -z "${FRESHJOTS_TOKEN:-}" ]; then
-          echo "::error::FRESHJOTS_TOKEN env var is required. Add it as a repository or organization secret and reference it in the workflow's 'env' block, e.g. 'env: FRESHJOTS_TOKEN: \${{ secrets.FRESHJOTS_TOKEN }}'."
+          echo "::error::FRESHJOTS_TOKEN env var is required. Add it as a repository or organization secret and reference it in the workflow's 'env' block, e.g. 'env: FRESHJOTS_TOKEN: ${{ '${{' }} secrets.FRESHJOTS_TOKEN }}'."
           exit 1
         fi
 
