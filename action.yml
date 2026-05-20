@@ -70,6 +70,20 @@ runs:
           exit 1
         fi
 
+    # Validate the optional deadline up-front so a typo ("24h", "0", "abc")
+    # surfaces as a clean ::error:: before we touch the network — never as
+    # a cryptic jq parse failure from `--argjson` downstream.
+    - name: Validate append-deadline-hours
+      if: inputs.append-deadline-hours != ''
+      shell: bash
+      env:
+        FJ_HOURS: ${{ inputs.append-deadline-hours }}
+      run: |
+        if ! [[ "${FJ_HOURS}" =~ ^[0-9]+$ ]] || (( FJ_HOURS < 1 || FJ_HOURS > 720 )); then
+          echo "::error::append-deadline-hours must be an integer 1..720 (got '${FJ_HOURS}')"
+          exit 1
+        fi
+
     # Append first. The append-by-filename endpoint creates the note on
     # first call (NamedStreamCreator), so this step is the only one that
     # MUST succeed. The deadline PATCH below is a nice-to-have layered on
@@ -83,21 +97,28 @@ runs:
         FJ_API: ${{ inputs.api-url }}
       run: |
         set -euo pipefail
+        # Percent-encode the filename so spaces / `?` / `#` / `&` / `/` in a
+        # note name don't produce a malformed URL.
+        note_enc=$(jq -rn --arg n "${FJ_NOTE}" '$n|@uri')
         body=$(jq -n --arg text "${FJ_TEXT}" '{text:$text}')
-        http_code=$(curl -sS -o /tmp/fjs_append.json -w '%{http_code}' \
-          -X POST "${FJ_API}/notes/by-filename/${FJ_NOTE}/append" \
+        resp="${RUNNER_TEMP}/fjs_append.json"
+        http_code=$(curl -sS -o "${resp}" -w '%{http_code}' \
+          -X POST "${FJ_API}/notes/by-filename/${note_enc}/append" \
           -H "Authorization: Bearer ${FRESHJOTS_TOKEN}" \
           -H "Content-Type: application/json" \
           -d "${body}")
         if [[ ! "${http_code}" =~ ^2 ]]; then
           echo "::error::append failed (HTTP ${http_code})"
-          cat /tmp/fjs_append.json
+          cat "${resp}"
           exit 1
         fi
         # Response shape: {"note":{"id":N,...},"appended":{"bytes":...}}.
         # Fall back to top-level .id for forward-compat with a flatter shape.
-        id=$(jq -r '.note.id // .id // empty' /tmp/fjs_append.json)
+        id=$(jq -r '.note.id // .id // empty' "${resp}")
         echo "note-id=${id}" >> "${GITHUB_OUTPUT}"
+        if [ -z "${id}" ]; then
+          echo "::warning::append succeeded but response had no note id — output 'note-id' is empty"
+        fi
         echo "Appended to ${FJ_NOTE} (note id ${id})"
 
     # Deadline PATCH runs after the append so the note is guaranteed to
@@ -112,9 +133,11 @@ runs:
         FJ_API: ${{ inputs.api-url }}
       run: |
         set -euo pipefail
+        note_enc=$(jq -rn --arg n "${FJ_NOTE}" '$n|@uri')
         body=$(jq -n --argjson hrs "${FJ_HOURS}" '{note:{append_deadline_hours:$hrs}}')
-        http_code=$(curl -sS -o /tmp/fjs_patch.json -w '%{http_code}' \
-          -X PATCH "${FJ_API}/notes/by-filename/${FJ_NOTE}" \
+        resp="${RUNNER_TEMP}/fjs_patch.json"
+        http_code=$(curl -sS -o "${resp}" -w '%{http_code}' \
+          -X PATCH "${FJ_API}/notes/by-filename/${note_enc}" \
           -H "Authorization: Bearer ${FRESHJOTS_TOKEN}" \
           -H "Content-Type: application/json" \
           -d "${body}")
@@ -125,5 +148,5 @@ runs:
           # previous step. A failed PATCH is a configuration issue, not a
           # missed run, and the user shouldn't see a red workflow over it.
           echo "::warning::deadline PATCH failed (HTTP ${http_code}) — heartbeat was still recorded"
-          cat /tmp/fjs_patch.json
+          cat "${resp}"
         fi

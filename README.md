@@ -18,6 +18,29 @@ notebook from any workflow. One step, no install.
 That's it. The note is created on first append; subsequent runs append a
 line each. Read the history from your phone, anytime.
 
+## Before it works
+
+Three things must be in place before the first workflow run can write to
+your notebook:
+
+1. **A Fresh Jots account on the [Pro tier](https://freshjots.com/pricing)
+   or higher.** API access — including this action — is available on Pro
+   and Team plans; the free and Personal plans are web-only.
+2. **An API token, minted at
+   <https://freshjots.com/settings/api_tokens>.** For CI use, choose the
+   **write-only** scope and bind the token to the single note you'll be
+   appending to. A leaked token then writes garbage to one notebook
+   instead of exposing the whole account.
+3. **The token stored as a GitHub Actions secret named
+   `FRESHJOTS_TOKEN`.** In the consuming repo, go to *Settings → Secrets
+   and variables → Actions → New repository secret*, paste the value,
+   and name it exactly `FRESHJOTS_TOKEN`. For multiple repos, store it
+   once at the org level and grant each repo access to it instead.
+
+The note itself doesn't need to exist first — the action creates it on
+its initial append. Create it manually only if you want to set a custom
+title, owner, or privacy level up front.
+
 ## Why use it
 
 Every workflow run gets a one-line entry in a notebook of your choice,

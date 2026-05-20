@@ -1,0 +1,80 @@
+# CI for the action itself.
+#
+# Lints the workflow + bash, and exercises the negative-path inputs
+# (missing token, invalid deadline) end-to-end. Neither needs a real API
+# or secret — and they're the exact cases where past breakage has been
+# user-visible as a confusing error rather than a clean ::error::.
+#
+# Happy-path integration coverage against the real API needs a
+# FRESHJOTS_TOKEN secret on this repo; once that's set up, add a third
+# job calling `uses: ./` against a sandbox notebook.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        # Pinned via the upstream download script — drops a single
+        # ./actionlint binary in the workspace. Also runs shellcheck on
+        # `run:` bash blocks automatically when shellcheck is available
+        # (ubuntu-latest preinstalls it).
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      - name: Lint workflows
+        run: ./actionlint -color
+
+  test-missing-token:
+    name: fails without FRESHJOTS_TOKEN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Invoke action without token (expected to fail)
+        id: noauth
+        continue-on-error: true
+        uses: ./
+        with:
+          note: ci-smoke
+          text: should never run
+      - name: Assert failure
+        env:
+          OUTCOME: ${{ steps.noauth.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "expected the action to fail without FRESHJOTS_TOKEN, got outcome='$OUTCOME'"
+            exit 1
+          fi
+
+  test-invalid-deadline:
+    name: fails on non-numeric append-deadline-hours
+    runs-on: ubuntu-latest
+    env:
+      # Non-empty so the token-validation step passes; the deadline
+      # validation should fail before any HTTP call is made, so the
+      # dummy value is never sent anywhere.
+      FRESHJOTS_TOKEN: dummy-for-validation-only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Invoke action with bad deadline (expected to fail)
+        id: badhours
+        continue-on-error: true
+        uses: ./
+        with:
+          note: ci-smoke
+          text: should never reach the API
+          append-deadline-hours: 24h
+      - name: Assert failure
+        env:
+          OUTCOME: ${{ steps.badhours.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "expected the action to fail on append-deadline-hours='24h', got outcome='$OUTCOME'"
+            exit 1
+          fi
